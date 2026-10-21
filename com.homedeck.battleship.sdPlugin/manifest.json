@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "Name": "Battleship",
+  "Version": "1.0.0.0",
+  "Author": "Home Deck",
+  "Description": "Turn a block of keys into a Battleship hunting grid. Fire at the hidden 3-ship fleet (sized down to fit your deck), sink every ship to win, and watch the Turn Indicator key switch between your turn and the enemy's few seconds of return fire.",
+  "Icon": "imgs/plugin/plugin-icon",
+  "Category": "Battleship",
+  "CategoryIcon": "imgs/plugin/category-icon",
+  "CodePath": "bin/plugin.js",
+  "DefaultWindowSize": [
+    420,
+    420
+  ],
+  "UUID": "com.homedeck.battleship",
+  "SDKVersion": 3,
+  "Software": {
+    "MinimumVersion": "6.9"
+  },
+  "Nodejs": {
+    "Version": "20",
+    "Debug": "enabled"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    },
+    {
+      "Platform": "mac",
+      "MinimumVersion": "10.15"
+    }
+  ],
+  "Actions": [
+    {
+      "Name": "Cell",
+      "UUID": "com.homedeck.battleship.cell",
+      "Icon": "imgs/actions/cell/icon",
+      "Tooltip": "One square of the hunting grid. Place these in a solid rectangular block on a folder page (7 wide x 4 tall fits a Stream Deck XL). Press a cell to fire at it.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/cell/icon",
+          "ShowTitle": false
+        }
+      ]
+    },
+    {
+      "Name": "Turn Indicator",
+      "UUID": "com.homedeck.battleship.turnindicator",
+      "Icon": "imgs/actions/turnindicator/icon",
+      "Tooltip": "Shows whose turn it is. Place one of these near the top-left of your grid (it doesn't need to touch the grid). It switches to Enemy Turn for a few seconds after each shot, then back to yours.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/turnindicator/icon",
+          "ShowTitle": false
+        }
+      ]
+    }
+  ]
+}

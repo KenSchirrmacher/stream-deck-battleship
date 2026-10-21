@@ -1,0 +1,8 @@
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+com.homedeck.battleship.sdPlugin/logs/
+com.homedeck.battleship.sdPlugin/bin/
+com.homedeck.battleship.sdPlugin/imgs/
+*.streamDeckPlugin
