@@ -1,21 +1,19 @@
 import { action, KeyDownEvent, SingletonAction, WillAppearEvent, WillDisappearEvent } from "@elgato/streamdeck";
 import { gameEngine } from "../game/engine.js";
 
-@action({ UUID: "com.homedeck.battleship.fleetcell" })
-export class FleetCellAction extends SingletonAction {
+@action({ UUID: "com.homedeck.battleship.viewtoggle" })
+export class ViewToggleAction extends SingletonAction {
   override onWillAppear(ev: WillAppearEvent): void {
     if (!ev.action.isKey()) return;
-    const coords = ev.action.coordinates;
-    if (!coords) return;
-    gameEngine.registerFleetCell(ev.action.device.id, ev.action, coords.row, coords.column);
+    gameEngine.registerViewToggle(ev.action.device.id, ev.action);
   }
 
   override onWillDisappear(ev: WillDisappearEvent): void {
-    gameEngine.unregisterFleetCell(ev.action.device.id, ev.action.id);
+    gameEngine.unregisterViewToggle(ev.action.device.id, ev.action.id);
   }
 
   override onKeyDown(ev: KeyDownEvent): void {
     if (!ev.action.isKey()) return;
-    gameEngine.handleFleetPress(ev.action.device.id, ev.action);
+    gameEngine.handleViewTogglePress(ev.action.device.id);
   }
 }

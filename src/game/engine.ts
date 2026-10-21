@@ -11,16 +11,17 @@ import {
   sunkFrameBad,
   sunkFrameGood,
   victoryFrame,
+  viewToggleFrame,
   waterFrame,
+  type BoardView,
 } from "./render.js";
 
 const APPEAR_DEBOUNCE_MS = 400;
 const END_RESET_MS = 3_500;
 const ENEMY_TURN_MIN_MS = 3_000;
 const ENEMY_TURN_MAX_MS = 5_000;
-const MIN_WIDTH = 3;
-const MIN_HEIGHT = 3;
-const MAX_SHIP_LENGTH_SLACK = 0; // require board's longer side to fit the longest ship exactly or better
+const MIN_WIDTH = 4;
+const MIN_HEIGHT = 4;
 
 // Reduced 3-ship fleet (classic Battleship's 5 ships don't fit an 8x4 deck grid).
 const FLEET: number[] = [4, 3, 2];
@@ -28,6 +29,7 @@ const MAX_PLACEMENT_ATTEMPTS = 2_000;
 
 type CellStatus = "water" | "ship" | "selecting" | "hit" | "miss" | "sunk";
 type Phase = "placement" | "player" | "enemy" | "win" | "lose";
+type Orientation = "horizontal" | "vertical";
 
 type RegisteredCell = {
   action: KeyAction;
@@ -41,27 +43,37 @@ type Ship = {
   cells: number[];
 };
 
-type Board = {
+/** The one physical block of keys, shared by both logical boards. */
+type Grid = {
   cells: Map<string, RegisteredCell>;
   order: string[];
   width: number;
   height: number;
   started: boolean;
+  appearDebounce: ReturnType<typeof setTimeout> | null;
+};
+
+/** A board's logical state -- not tied to any physical keys. */
+type LogicalBoard = {
   status: CellStatus[];
   shipOfCell: number[];
   ships: Ship[];
   shipsRemaining: number;
-  appearDebounce: ReturnType<typeof setTimeout> | null;
 };
 
-type Orientation = "horizontal" | "vertical";
+function freshLogicalBoard(): LogicalBoard {
+  return { status: [], shipOfCell: [], ships: [], shipsRemaining: 0 };
+}
 
 type DeviceState = {
-  fleet: Board;
-  water: Board;
+  grid: Grid;
+  fleet: LogicalBoard;
+  waters: LogicalBoard;
   indicatorAction: KeyAction | null;
+  viewToggleAction: KeyAction | null;
   gameStarted: boolean;
   phase: Phase;
+  view: BoardView;
   placementShipIndex: number;
   placementAnchor: number | null;
   placementOrientation: Orientation;
@@ -70,28 +82,16 @@ type DeviceState = {
   turnTimer: ReturnType<typeof setTimeout> | null;
 };
 
-function freshBoard(): Board {
-  return {
-    cells: new Map(),
-    order: [],
-    width: 0,
-    height: 0,
-    started: false,
-    status: [],
-    shipOfCell: [],
-    ships: [],
-    shipsRemaining: 0,
-    appearDebounce: null,
-  };
-}
-
 function freshState(): DeviceState {
   return {
-    fleet: freshBoard(),
-    water: freshBoard(),
+    grid: { cells: new Map(), order: [], width: 0, height: 0, started: false, appearDebounce: null },
+    fleet: freshLogicalBoard(),
+    waters: freshLogicalBoard(),
     indicatorAction: null,
+    viewToggleAction: null,
     gameStarted: false,
     phase: "placement",
+    view: "fleet",
     placementShipIndex: 0,
     placementAnchor: null,
     placementOrientation: "horizontal",
@@ -106,35 +106,19 @@ class GameEngine {
 
   // --- Registration -------------------------------------------------------
 
-  registerFleetCell(deviceId: string, action: KeyAction, row: number, col: number): void {
+  registerCell(deviceId: string, action: KeyAction, row: number, col: number): void {
     const state = this.getOrCreate(deviceId);
-    state.fleet.cells.set(action.id, { action, row, col });
-    void action.setImage(waterFrame()).catch((err) =>
-      streamDeck.logger.error(`battleship: setImage(fleet water) failed for ${action.id}: ${String(err)}`),
-    );
-    this.scheduleBoardStart(state, state.fleet);
-  }
-
-  unregisterFleetCell(deviceId: string, actionId: string): void {
-    const state = this.devices.get(deviceId);
-    if (!state) return;
-    state.fleet.cells.delete(actionId);
-    this.maybeTeardown(deviceId, state);
-  }
-
-  registerWaterCell(deviceId: string, action: KeyAction, row: number, col: number): void {
-    const state = this.getOrCreate(deviceId);
-    state.water.cells.set(action.id, { action, row, col });
+    state.grid.cells.set(action.id, { action, row, col });
     void action.setImage(waterFrame()).catch((err) =>
       streamDeck.logger.error(`battleship: setImage(water) failed for ${action.id}: ${String(err)}`),
     );
-    this.scheduleBoardStart(state, state.water);
+    this.scheduleGridStart(state);
   }
 
-  unregisterWaterCell(deviceId: string, actionId: string): void {
+  unregisterCell(deviceId: string, actionId: string): void {
     const state = this.devices.get(deviceId);
     if (!state) return;
-    state.water.cells.delete(actionId);
+    state.grid.cells.delete(actionId);
     this.maybeTeardown(deviceId, state);
   }
 
@@ -151,14 +135,62 @@ class GameEngine {
     this.maybeTeardown(deviceId, state);
   }
 
+  registerViewToggle(deviceId: string, action: KeyAction): void {
+    const state = this.getOrCreate(deviceId);
+    state.viewToggleAction = action;
+    this.renderViewToggle(state);
+  }
+
+  unregisterViewToggle(deviceId: string, actionId: string): void {
+    const state = this.devices.get(deviceId);
+    if (!state || !state.viewToggleAction || state.viewToggleAction.id !== actionId) return;
+    state.viewToggleAction = null;
+    this.maybeTeardown(deviceId, state);
+  }
+
   // --- Input ----------------------------------------------------------------
 
-  handleFleetPress(deviceId: string, action: KeyAction): void {
+  handleCellPress(deviceId: string, action: KeyAction): void {
+    const state = this.devices.get(deviceId);
+    if (!state || !state.gameStarted) return;
+
+    const idx = state.grid.order.indexOf(action.id);
+    if (idx < 0) return;
+
+    if (state.phase === "placement") {
+      this.handlePlacementPress(state, idx);
+      return;
+    }
+
+    if (state.view === "waters" && state.phase === "player") {
+      this.handleWaterFirePress(state, idx);
+    }
+    // Pressing fleet cells (your own board) outside placement is just a passive view -- no-op.
+  }
+
+  /** Pressing the Turn Indicator rotates the ship being placed; it's inert otherwise. */
+  handleIndicatorPress(deviceId: string): void {
     const state = this.devices.get(deviceId);
     if (!state || !state.gameStarted || state.phase !== "placement") return;
 
-    const idx = state.fleet.order.indexOf(action.id);
-    if (idx < 0) return;
+    state.placementOrientation = state.placementOrientation === "horizontal" ? "vertical" : "horizontal";
+    if (state.placementAnchor !== null) this.updatePlacementPreview(state);
+    this.renderIndicator(state);
+  }
+
+  /** Pressing View Toggle flips which board the shared grid displays/controls. Locked during placement. */
+  handleViewTogglePress(deviceId: string): void {
+    const state = this.devices.get(deviceId);
+    if (!state || !state.gameStarted || state.phase === "placement") return;
+
+    state.view = state.view === "fleet" ? "waters" : "fleet";
+    this.renderCurrentView(state);
+    this.renderViewToggle(state);
+  }
+
+  // --- Placement --------------------------------------------------------------
+
+  private handlePlacementPress(state: DeviceState, idx: number): void {
     const status = state.fleet.status[idx];
 
     // Pressing the most-recently-placed ship un-places it (an escape hatch if boxed in).
@@ -169,7 +201,7 @@ class GameEngine {
       for (const c of ship.cells) {
         state.fleet.shipOfCell[c] = -1;
         state.fleet.status[c] = "water";
-        this.renderBoardCell(state.fleet, c, waterFrame());
+        this.renderGridCell(state, c, waterFrame());
       }
       state.fleet.shipsRemaining--;
       state.placementShipIndex--;
@@ -197,7 +229,7 @@ class GameEngine {
       for (const c of cells) {
         state.fleet.shipOfCell[c] = shipIdx;
         state.fleet.status[c] = "ship";
-        this.renderBoardCell(state.fleet, c, shipFrame());
+        this.renderGridCell(state, c, shipFrame());
       }
       state.fleet.ships.push({ length, hitCount: 0, cells });
       state.fleet.shipsRemaining++;
@@ -207,6 +239,9 @@ class GameEngine {
 
       if (state.placementShipIndex === FLEET.length) {
         state.phase = "player";
+        state.view = "waters";
+        this.renderCurrentView(state);
+        this.renderViewToggle(state);
       }
       this.renderIndicator(state);
       return;
@@ -221,103 +256,6 @@ class GameEngine {
     state.placementAnchor = idx;
     this.updatePlacementPreview(state);
   }
-
-  /** Pressing the Turn Indicator during placement rotates the ship currently being positioned. */
-  handleIndicatorPress(deviceId: string): void {
-    const state = this.devices.get(deviceId);
-    if (!state || !state.gameStarted || state.phase !== "placement") return;
-
-    state.placementOrientation = state.placementOrientation === "horizontal" ? "vertical" : "horizontal";
-    if (state.placementAnchor !== null) this.updatePlacementPreview(state);
-    this.renderIndicator(state);
-  }
-
-  handleWaterPress(deviceId: string, action: KeyAction): void {
-    const state = this.devices.get(deviceId);
-    if (!state || !state.gameStarted || state.phase !== "player") return;
-
-    const idx = state.water.order.indexOf(action.id);
-    if (idx < 0 || state.water.status[idx] !== "water") return;
-
-    const shipIdx = state.water.shipOfCell[idx];
-    if (shipIdx < 0) {
-      state.water.status[idx] = "miss";
-      this.renderBoardCell(state.water, idx, missFrame());
-    } else {
-      const ship = state.water.ships[shipIdx];
-      ship.hitCount++;
-      if (ship.hitCount === ship.length) {
-        for (const c of ship.cells) {
-          state.water.status[c] = "sunk";
-          this.renderBoardCell(state.water, c, sunkFrameGood());
-        }
-        state.water.shipsRemaining--;
-      } else {
-        state.water.status[idx] = "hit";
-        this.renderBoardCell(state.water, idx, hitFrame());
-      }
-    }
-
-    if (state.water.shipsRemaining === 0) {
-      state.phase = "win";
-      this.renderIndicator(state);
-      state.resetTimer = setTimeout(() => this.newGame(state), END_RESET_MS);
-      return;
-    }
-
-    state.phase = "enemy";
-    this.renderIndicator(state);
-    if (state.turnTimer) clearTimeout(state.turnTimer);
-    const delay = ENEMY_TURN_MIN_MS + Math.floor(Math.random() * (ENEMY_TURN_MAX_MS - ENEMY_TURN_MIN_MS + 1));
-    state.turnTimer = setTimeout(() => this.runEnemyTurn(state), delay);
-  }
-
-  private runEnemyTurn(state: DeviceState): void {
-    state.turnTimer = null;
-    if (state.phase !== "enemy") return;
-
-    const candidates: number[] = [];
-    for (let i = 0; i < state.fleet.status.length; i++) {
-      if (state.fleet.status[i] === "water" || state.fleet.status[i] === "ship") candidates.push(i);
-    }
-    if (candidates.length === 0) {
-      state.phase = "player";
-      this.renderIndicator(state);
-      return;
-    }
-
-    const idx = candidates[Math.floor(Math.random() * candidates.length)];
-    const shipIdx = state.fleet.shipOfCell[idx];
-    if (shipIdx < 0) {
-      state.fleet.status[idx] = "miss";
-      this.renderBoardCell(state.fleet, idx, missFrame());
-    } else {
-      const ship = state.fleet.ships[shipIdx];
-      ship.hitCount++;
-      if (ship.hitCount === ship.length) {
-        for (const c of ship.cells) {
-          state.fleet.status[c] = "sunk";
-          this.renderBoardCell(state.fleet, c, sunkFrameBad());
-        }
-        state.fleet.shipsRemaining--;
-      } else {
-        state.fleet.status[idx] = "hit";
-        this.renderBoardCell(state.fleet, idx, hitFrame());
-      }
-    }
-
-    if (state.fleet.shipsRemaining === 0) {
-      state.phase = "lose";
-      this.renderIndicator(state);
-      state.resetTimer = setTimeout(() => this.newGame(state), END_RESET_MS);
-      return;
-    }
-
-    state.phase = "player";
-    this.renderIndicator(state);
-  }
-
-  // --- Placement geometry ---------------------------------------------------
 
   /** The anchor is always the top-left-most cell; the ship extends right (horizontal) or down (vertical). */
   private computePreviewCells(width: number, height: number, anchor: number, orientation: Orientation, length: number): number[] | null {
@@ -335,12 +273,11 @@ class GameEngine {
     if (state.placementPreviewCells) {
       for (const c of state.placementPreviewCells) {
         state.fleet.status[c] = "water";
-        this.renderBoardCell(state.fleet, c, waterFrame());
+        this.renderGridCell(state, c, waterFrame());
       }
     } else if (state.placementAnchor !== null) {
-      // anchor was set but had no valid preview at the current orientation
       state.fleet.status[state.placementAnchor] = "water";
-      this.renderBoardCell(state.fleet, state.placementAnchor, waterFrame());
+      this.renderGridCell(state, state.placementAnchor, waterFrame());
     }
     state.placementPreviewCells = null;
   }
@@ -350,11 +287,11 @@ class GameEngine {
     this.clearPlacementPreview(state);
 
     const length = FLEET[state.placementShipIndex];
-    const cells = this.computePreviewCells(state.fleet.width, state.fleet.height, state.placementAnchor, state.placementOrientation, length);
+    const cells = this.computePreviewCells(state.grid.width, state.grid.height, state.placementAnchor, state.placementOrientation, length);
 
     if (!cells || cells.some((c) => state.fleet.shipOfCell[c] !== -1)) {
       state.fleet.status[state.placementAnchor] = "selecting";
-      this.renderBoardCell(state.fleet, state.placementAnchor, selectingFrame());
+      this.renderGridCell(state, state.placementAnchor, selectingFrame());
       state.placementPreviewCells = null;
       return;
     }
@@ -362,12 +299,104 @@ class GameEngine {
     state.placementPreviewCells = cells;
     for (const c of cells) {
       state.fleet.status[c] = "selecting";
-      this.renderBoardCell(state.fleet, c, selectingFrame());
+      this.renderGridCell(state, c, selectingFrame());
     }
   }
 
-  private placeFleetRandom(board: Board): void {
-    const total = board.width * board.height;
+  // --- Battle -----------------------------------------------------------------
+
+  private handleWaterFirePress(state: DeviceState, idx: number): void {
+    if (state.waters.status[idx] !== "water") return;
+
+    const shipIdx = state.waters.shipOfCell[idx];
+    if (shipIdx < 0) {
+      state.waters.status[idx] = "miss";
+      this.renderGridCell(state, idx, missFrame());
+    } else {
+      const ship = state.waters.ships[shipIdx];
+      ship.hitCount++;
+      if (ship.hitCount === ship.length) {
+        for (const c of ship.cells) {
+          state.waters.status[c] = "sunk";
+          this.renderGridCell(state, c, sunkFrameGood());
+        }
+        state.waters.shipsRemaining--;
+      } else {
+        state.waters.status[idx] = "hit";
+        this.renderGridCell(state, idx, hitFrame());
+      }
+    }
+
+    if (state.waters.shipsRemaining === 0) {
+      state.phase = "win";
+      this.renderIndicator(state);
+      state.resetTimer = setTimeout(() => this.newGame(state), END_RESET_MS);
+      return;
+    }
+
+    state.phase = "enemy";
+    state.view = "fleet";
+    this.renderCurrentView(state);
+    this.renderViewToggle(state);
+    this.renderIndicator(state);
+    if (state.turnTimer) clearTimeout(state.turnTimer);
+    const delay = ENEMY_TURN_MIN_MS + Math.floor(Math.random() * (ENEMY_TURN_MAX_MS - ENEMY_TURN_MIN_MS + 1));
+    state.turnTimer = setTimeout(() => this.runEnemyTurn(state), delay);
+  }
+
+  private runEnemyTurn(state: DeviceState): void {
+    state.turnTimer = null;
+    if (state.phase !== "enemy") return;
+
+    const candidates: number[] = [];
+    for (let i = 0; i < state.fleet.status.length; i++) {
+      if (state.fleet.status[i] === "water" || state.fleet.status[i] === "ship") candidates.push(i);
+    }
+    if (candidates.length === 0) {
+      state.phase = "player";
+      state.view = "waters";
+      this.renderCurrentView(state);
+      this.renderViewToggle(state);
+      this.renderIndicator(state);
+      return;
+    }
+
+    const idx = candidates[Math.floor(Math.random() * candidates.length)];
+    const shipIdx = state.fleet.shipOfCell[idx];
+    if (shipIdx < 0) {
+      state.fleet.status[idx] = "miss";
+      this.renderGridCell(state, idx, missFrame());
+    } else {
+      const ship = state.fleet.ships[shipIdx];
+      ship.hitCount++;
+      if (ship.hitCount === ship.length) {
+        for (const c of ship.cells) {
+          state.fleet.status[c] = "sunk";
+          this.renderGridCell(state, c, sunkFrameBad());
+        }
+        state.fleet.shipsRemaining--;
+      } else {
+        state.fleet.status[idx] = "hit";
+        this.renderGridCell(state, idx, hitFrame());
+      }
+    }
+
+    if (state.fleet.shipsRemaining === 0) {
+      state.phase = "lose";
+      this.renderIndicator(state);
+      state.resetTimer = setTimeout(() => this.newGame(state), END_RESET_MS);
+      return;
+    }
+
+    state.phase = "player";
+    state.view = "waters";
+    this.renderCurrentView(state);
+    this.renderViewToggle(state);
+    this.renderIndicator(state);
+  }
+
+  private placeFleetRandom(board: LogicalBoard, width: number, height: number): void {
+    const total = width * height;
     board.shipOfCell = new Array(total).fill(-1);
     board.ships = [];
 
@@ -375,8 +404,8 @@ class GameEngine {
       let placed = false;
       for (let attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS && !placed; attempt++) {
         const horizontal = Math.random() < 0.5;
-        const rowChoices = horizontal ? board.height : board.height - length + 1;
-        const colChoices = horizontal ? board.width - length + 1 : board.width;
+        const rowChoices = horizontal ? height : height - length + 1;
+        const colChoices = horizontal ? width - length + 1 : width;
         if (rowChoices <= 0 || colChoices <= 0) continue;
 
         const row = Math.floor(Math.random() * rowChoices);
@@ -385,7 +414,7 @@ class GameEngine {
         for (let i = 0; i < length; i++) {
           const r = horizontal ? row : row + i;
           const c = horizontal ? col + i : col;
-          cellIdxs.push(r * board.width + c);
+          cellIdxs.push(r * width + c);
         }
         if (cellIdxs.some((idx) => board.shipOfCell[idx] !== -1)) continue;
 
@@ -395,17 +424,42 @@ class GameEngine {
         placed = true;
       }
       if (!placed) {
-        streamDeck.logger.warn(`battleship: couldn't place a ${length}-length ship on a ${board.width}x${board.height} board.`);
+        streamDeck.logger.warn(`battleship: couldn't place a ${length}-length ship on a ${width}x${height} board.`);
       }
     }
   }
 
-  // --- Lifecycle --------------------------------------------------------------
+  // --- Rendering ----------------------------------------------------------------
 
-  private renderBoardCell(board: Board, idx: number, image: string): void {
-    const id = board.order[idx];
-    const cell = board.cells.get(id);
+  private renderGridCell(state: DeviceState, idx: number, image: string): void {
+    const id = state.grid.order[idx];
+    const cell = state.grid.cells.get(id);
     if (cell) void cell.action.setImage(image);
+  }
+
+  private frameFor(status: CellStatus, sunkVariant: "good" | "bad"): string {
+    switch (status) {
+      case "water":
+        return waterFrame();
+      case "ship":
+        return shipFrame();
+      case "selecting":
+        return selectingFrame();
+      case "miss":
+        return missFrame();
+      case "hit":
+        return hitFrame();
+      case "sunk":
+        return sunkVariant === "good" ? sunkFrameGood() : sunkFrameBad();
+    }
+  }
+
+  private renderCurrentView(state: DeviceState): void {
+    const board = state.view === "fleet" ? state.fleet : state.waters;
+    const sunkVariant = state.view === "fleet" ? "bad" : "good";
+    for (let i = 0; i < board.status.length; i++) {
+      this.renderGridCell(state, i, this.frameFor(board.status[i], sunkVariant));
+    }
   }
 
   private renderIndicator(state: DeviceState): void {
@@ -433,29 +487,33 @@ class GameEngine {
     );
   }
 
-  private scheduleBoardStart(state: DeviceState, board: Board): void {
-    if (board.appearDebounce) clearTimeout(board.appearDebounce);
-    board.appearDebounce = setTimeout(() => {
-      board.appearDebounce = null;
-      if (board.started || board.cells.size === 0) return;
+  private renderViewToggle(state: DeviceState): void {
+    if (!state.viewToggleAction) return;
+    void state.viewToggleAction.setImage(viewToggleFrame(state.view)).catch((err) =>
+      streamDeck.logger.error(`battleship: setImage(viewToggle) failed: ${String(err)}`),
+    );
+  }
 
-      const cells = [...board.cells.values()];
+  // --- Lifecycle --------------------------------------------------------------
+
+  private scheduleGridStart(state: DeviceState): void {
+    const grid = state.grid;
+    if (grid.appearDebounce) clearTimeout(grid.appearDebounce);
+    grid.appearDebounce = setTimeout(() => {
+      grid.appearDebounce = null;
+      if (grid.started || grid.cells.size === 0) return;
+
+      const cells = [...grid.cells.values()];
       const minRow = Math.min(...cells.map((c) => c.row));
       const maxRow = Math.max(...cells.map((c) => c.row));
       const minCol = Math.min(...cells.map((c) => c.col));
       const maxCol = Math.max(...cells.map((c) => c.col));
       const width = maxCol - minCol + 1;
       const height = maxRow - minRow + 1;
-      const longestShip = FLEET[0];
 
-      if (
-        cells.length !== width * height ||
-        width < MIN_WIDTH ||
-        height < MIN_HEIGHT ||
-        Math.max(width, height) + MAX_SHIP_LENGTH_SLACK < longestShip
-      ) {
+      if (cells.length !== width * height || width < MIN_WIDTH || height < MIN_HEIGHT) {
         streamDeck.logger.warn(
-          `battleship: registered cells (${cells.length}) don't form a usable solid rectangle (${width}x${height}); not starting.`,
+          `battleship: registered cells (${cells.length}) don't form a solid rectangle (${width}x${height}) of at least ${MIN_WIDTH}x${MIN_HEIGHT}; not starting.`,
         );
         return;
       }
@@ -466,18 +524,13 @@ class GameEngine {
         order[idx] = c.action.id;
       }
 
-      board.order = order;
-      board.width = width;
-      board.height = height;
-      board.started = true;
-      this.maybeBeginGame(state);
+      grid.order = order;
+      grid.width = width;
+      grid.height = height;
+      grid.started = true;
+      state.gameStarted = true;
+      this.newGame(state);
     }, APPEAR_DEBOUNCE_MS);
-  }
-
-  private maybeBeginGame(state: DeviceState): void {
-    if (state.gameStarted || !state.fleet.started || !state.water.started) return;
-    state.gameStarted = true;
-    this.newGame(state);
   }
 
   private newGame(state: DeviceState): void {
@@ -486,29 +539,31 @@ class GameEngine {
     state.resetTimer = null;
     state.turnTimer = null;
 
-    state.fleet.status = new Array(state.fleet.width * state.fleet.height).fill("water");
-    state.fleet.shipOfCell = new Array(state.fleet.width * state.fleet.height).fill(-1);
-    state.fleet.ships = [];
-    state.fleet.shipsRemaining = 0;
-    for (let i = 0; i < state.fleet.status.length; i++) this.renderBoardCell(state.fleet, i, waterFrame());
+    const total = state.grid.width * state.grid.height;
+    state.fleet = freshLogicalBoard();
+    state.fleet.status = new Array(total).fill("water");
+    state.fleet.shipOfCell = new Array(total).fill(-1);
 
-    state.water.status = new Array(state.water.width * state.water.height).fill("water");
-    this.placeFleetRandom(state.water);
-    state.water.shipsRemaining = state.water.ships.length;
-    for (let i = 0; i < state.water.status.length; i++) this.renderBoardCell(state.water, i, waterFrame());
+    state.waters = freshLogicalBoard();
+    state.waters.status = new Array(total).fill("water");
+    this.placeFleetRandom(state.waters, state.grid.width, state.grid.height);
+    state.waters.shipsRemaining = state.waters.ships.length;
 
     state.placementShipIndex = 0;
     state.placementAnchor = null;
     state.placementOrientation = "horizontal";
     state.placementPreviewCells = null;
     state.phase = "placement";
+    state.view = "fleet";
+
+    this.renderCurrentView(state);
+    this.renderViewToggle(state);
     this.renderIndicator(state);
   }
 
   private maybeTeardown(deviceId: string, state: DeviceState): void {
-    if (state.fleet.cells.size > 0 || state.water.cells.size > 0 || state.indicatorAction) return;
-    if (state.fleet.appearDebounce) clearTimeout(state.fleet.appearDebounce);
-    if (state.water.appearDebounce) clearTimeout(state.water.appearDebounce);
+    if (state.grid.cells.size > 0 || state.indicatorAction || state.viewToggleAction) return;
+    if (state.grid.appearDebounce) clearTimeout(state.grid.appearDebounce);
     if (state.resetTimer) clearTimeout(state.resetTimer);
     if (state.turnTimer) clearTimeout(state.turnTimer);
     this.devices.delete(deviceId);

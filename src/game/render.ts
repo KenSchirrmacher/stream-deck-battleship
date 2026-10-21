@@ -163,3 +163,28 @@ export function victoryFrame(): string {
 export function defeatFrame(): string {
   return indicatorFrame("lose");
 }
+
+export type BoardView = "fleet" | "waters";
+
+const VIEW_BG: Record<BoardView, string> = {
+  fleet: "#37474F",
+  waters: "#14518C",
+};
+
+function viewGlyph(view: BoardView): string {
+  if (view === "fleet") {
+    return `<path d="M30 76 L30 58 L46 50 L98 50 L114 58 L114 76 Z" fill="${SHIP_HULL}"/>
+      <rect x="66" y="34" width="6" height="18" fill="${SHIP_HULL}"/>`;
+  }
+  return `<circle cx="72" cy="72" r="26" fill="none" stroke="#E3F2FD" stroke-width="5"/>
+    <circle cx="72" cy="72" r="6" fill="#E3F2FD"/>
+    <path d="M72 38 L72 48 M72 96 L72 106 M38 72 L48 72 M96 72 L106 72" stroke="#E3F2FD" stroke-width="5" stroke-linecap="round"/>`;
+}
+
+export function viewToggleFrame(view: BoardView): string {
+  const lines: [string, string] = view === "fleet" ? ["MY", "FLEET"] : ["ENEMY", "WATERS"];
+  const body = `${viewGlyph(view)}
+    <text x="72" y="118" font-family="Segoe UI, sans-serif" font-size="18" font-weight="800" text-anchor="middle" fill="#FFFFFF">${lines[0]}</text>
+    <text x="72" y="136" font-family="Segoe UI, sans-serif" font-size="18" font-weight="800" text-anchor="middle" fill="#FFFFFF">${lines[1]}</text>`;
+  return toDataUri(cellWrap(VIEW_BG[view], body));
+}

@@ -7,15 +7,15 @@ export class CellAction extends SingletonAction {
     if (!ev.action.isKey()) return;
     const coords = ev.action.coordinates;
     if (!coords) return;
-    gameEngine.registerWaterCell(ev.action.device.id, ev.action, coords.row, coords.column);
+    gameEngine.registerCell(ev.action.device.id, ev.action, coords.row, coords.column);
   }
 
   override onWillDisappear(ev: WillDisappearEvent): void {
-    gameEngine.unregisterWaterCell(ev.action.device.id, ev.action.id);
+    gameEngine.unregisterCell(ev.action.device.id, ev.action.id);
   }
 
   override onKeyDown(ev: KeyDownEvent): void {
     if (!ev.action.isKey()) return;
-    gameEngine.handleWaterPress(ev.action.device.id, ev.action);
+    gameEngine.handleCellPress(ev.action.device.id, ev.action);
   }
 }
