@@ -46,6 +46,10 @@ const cellActionBody = `
   <rect x="12" y="12" width="48" height="48" rx="10" fill="#14518C" stroke="#0D3B66" stroke-width="2.5"/>
   <path d="M20 46 Q 28 42, 36 46 T 52 46" stroke="#1E6BB8" stroke-width="3" fill="none" stroke-linecap="round"/>`;
 
+const fleetCellActionBody = `
+  <rect x="12" y="12" width="48" height="48" rx="10" fill="#37474F" stroke="#0D3B66" stroke-width="2.5"/>
+  <path d="M20 40 L20 32 L28 28 L48 28 L56 32 L56 40 Z" fill="#607D8B"/>`;
+
 const turnIndicatorBody = `
   <rect x="12" y="12" width="48" height="48" rx="10" fill="#14518C" stroke="#0D3B66" stroke-width="2.5"/>
   <path d="M36 20 L40 30 L51 30 L42 37 L46 48 L36 41 L26 48 L30 37 L21 30 L32 30 Z" fill="#E3F2FD"/>`;
@@ -53,6 +57,7 @@ const turnIndicatorBody = `
 await writeIcon("plugin", "plugin-icon", pluginBody, [256, 512]);
 await writeIcon("plugin", "category-icon", categoryBody, [28, 56]);
 await writeIcon("actions/cell", "icon", cellActionBody);
+await writeIcon("actions/fleetcell", "icon", fleetCellActionBody);
 await writeIcon("actions/turnindicator", "icon", turnIndicatorBody);
 
 console.log("Icons generated in com.homedeck.battleship.sdPlugin/imgs/");

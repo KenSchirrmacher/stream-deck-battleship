@@ -3,7 +3,7 @@
   "Name": "Battleship",
   "Version": "1.0.0.0",
   "Author": "Home Deck",
-  "Description": "Turn a block of keys into a Battleship hunting grid. Fire at the hidden 3-ship fleet (sized down to fit your deck), sink every ship to win, and watch the Turn Indicator key switch between your turn and the enemy's few seconds of return fire.",
+  "Description": "Turn two blocks of keys into a real Battleship match. Place your 3-ship fleet (sized down to fit your deck) on your own grid, then fire on the enemy's hidden grid to win. A Turn Indicator key shows whose turn it is, and the enemy's shots land right on your own board a few seconds after yours.",
   "Icon": "imgs/plugin/plugin-icon",
   "Category": "Battleship",
   "CategoryIcon": "imgs/plugin/category-icon",
@@ -33,10 +33,25 @@
   ],
   "Actions": [
     {
+      "Name": "Fleet Cell",
+      "UUID": "com.homedeck.battleship.fleetcell",
+      "Icon": "imgs/actions/fleetcell/icon",
+      "Tooltip": "One square of YOUR fleet grid. Place these in a solid rectangular block on a folder page (3 wide x 4 tall works well). At the start of a game, press a cell to anchor a ship there (it previews extending right or down), use the Turn Indicator to rotate it, then press any previewed cell to confirm. The enemy fires at this grid during its turn.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/fleetcell/icon",
+          "ShowTitle": false
+        }
+      ]
+    },
+    {
       "Name": "Cell",
       "UUID": "com.homedeck.battleship.cell",
       "Icon": "imgs/actions/cell/icon",
-      "Tooltip": "One square of the hunting grid. Place these in a solid rectangular block on a folder page (7 wide x 4 tall fits a Stream Deck XL). Press a cell to fire at it.",
+      "Tooltip": "One square of the ENEMY's hunting grid. Place these in a solid rectangular block on a folder page (3 wide x 4 tall works well). Press a cell to fire at it once you're done placing your own fleet.",
       "Controllers": [
         "Keypad"
       ],
@@ -51,7 +66,7 @@
       "Name": "Turn Indicator",
       "UUID": "com.homedeck.battleship.turnindicator",
       "Icon": "imgs/actions/turnindicator/icon",
-      "Tooltip": "Shows whose turn it is. Place one of these near the top-left of your grid (it doesn't need to touch the grid). It switches to Enemy Turn for a few seconds after each shot, then back to yours.",
+      "Tooltip": "Shows the game's current phase: placing ships, your turn, the enemy's turn, or the match result. During ship placement, pressing this key rotates the ship you're currently positioning. Place one of these near the top-left of your grids.",
       "Controllers": [
         "Keypad"
       ],

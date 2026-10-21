@@ -2,10 +2,14 @@ const SIZE = 144;
 const CELL_BORDER = "#0D3B66";
 const WATER_BG = "#14518C";
 const WATER_WAVE = "#1E6BB8";
+const SHIP_BG = "#37474F";
+const SHIP_HULL = "#607D8B";
+const SELECTING_BG = "#F9A825";
 const HIT_BG = "#B71C1C";
 const HIT_FLAME = "#FFB300";
 const SUNK_BG = "#263238";
 const WIN_GLOW = "#43A047";
+const LOSE_GLOW = "#FF6F00";
 const RIPPLE = "#E3F2FD";
 
 function toDataUri(svg: string): string {
@@ -28,6 +32,16 @@ function waterGlyph(): string {
     <path d="M20 86 Q 36 78, 52 86 T 84 86 T 116 86" stroke="${WATER_WAVE}" stroke-width="5" fill="none" stroke-linecap="round"/>`;
 }
 
+function shipGlyph(): string {
+  return `<path d="M30 76 L30 58 L46 50 L98 50 L114 58 L114 76 Z" fill="${SHIP_HULL}"/>
+    <rect x="66" y="34" width="6" height="18" fill="${SHIP_HULL}"/>`;
+}
+
+function selectingGlyph(): string {
+  return `<circle cx="72" cy="72" r="30" fill="none" stroke="#FFF8E1" stroke-width="5"/>
+    <path d="M72 42 L72 56 M72 88 L72 102 M42 72 L56 72 M88 72 L102 72" stroke="#FFF8E1" stroke-width="5" stroke-linecap="round"/>`;
+}
+
 function missGlyph(): string {
   return `<circle cx="72" cy="72" r="26" fill="none" stroke="${RIPPLE}" stroke-width="5"/>
     <circle cx="72" cy="72" r="12" fill="${RIPPLE}"/>`;
@@ -38,12 +52,22 @@ function hitGlyph(): string {
 }
 
 function sunkGlyph(): string {
-  return `<circle cx="72" cy="72" r="34" fill="#101014"/>
-    <path d="M58 58 L86 86 M86 58 L58 86" stroke="${HIT_FLAME}" stroke-width="7" stroke-linecap="round"/>`;
+  return `<path d="M30 76 L30 58 L46 50 L98 50 L114 58 L114 76 Z" fill="#1C2327"/>
+    <rect x="66" y="34" width="6" height="18" fill="#1C2327"/>
+    <path d="M54 50 L63 76 M90 50 L81 76" stroke="${HIT_FLAME}" stroke-width="4" stroke-linecap="round"/>
+    <path d="M64 40 Q 68 28, 74 34 Q 78 24, 84 30" stroke="#78909C" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.7"/>`;
 }
 
 export function waterFrame(): string {
   return toDataUri(cellWrap(WATER_BG, waterGlyph()));
+}
+
+export function shipFrame(): string {
+  return toDataUri(cellWrap(SHIP_BG, shipGlyph()));
+}
+
+export function selectingFrame(): string {
+  return toDataUri(cellWrap(SELECTING_BG, selectingGlyph()));
 }
 
 export function missFrame(): string {
@@ -54,36 +78,74 @@ export function hitFrame(): string {
   return toDataUri(cellWrap(HIT_BG, hitGlyph()));
 }
 
-export function sunkFrame(): string {
+/** A ship of yours the enemy fully sunk -- same wreck art, warning-orange ring. */
+export function sunkFrameBad(): string {
+  return toDataUri(cellWrap(SUNK_BG, sunkGlyph(), LOSE_GLOW));
+}
+
+/** An enemy ship you fully sunk -- same wreck art, victory-green ring. */
+export function sunkFrameGood(): string {
   return toDataUri(cellWrap(SUNK_BG, sunkGlyph(), WIN_GLOW));
 }
 
-export type Turn = "player" | "enemy" | "win";
+export type IndicatorState = "placement" | "player" | "enemy" | "win" | "lose";
 
-const INDICATOR_BG: Record<Turn, string> = {
+const INDICATOR_BG: Record<IndicatorState, string> = {
+  placement: "#37474F",
   player: "#14518C",
   enemy: "#B71C1C",
   win: "#2E7D32",
+  lose: "#3B0A0A",
 };
 
-function indicatorGlyph(turn: Turn): string {
-  if (turn === "player") {
+function indicatorGlyph(state: IndicatorState): string {
+  if (state === "placement") {
+    return `<path d="M34 76 L34 58 L48 50 L96 50 L110 58 L110 76 Z" fill="#CFD8DC"/>
+      <path d="M94 32 A 14 14 0 1 1 80 20" stroke="#FFCA28" stroke-width="5" fill="none" stroke-linecap="round"/>
+      <path d="M76 16 L80 20 L85 13" stroke="#FFCA28" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+  if (state === "player") {
     return `<path d="M72 28 L80 48 L102 48 L84 62 L92 86 L72 72 L52 86 L60 62 L42 48 L64 48 Z" fill="#E3F2FD"/>`;
   }
-  if (turn === "enemy") {
+  if (state === "enemy") {
     return `<circle cx="72" cy="72" r="26" fill="none" stroke="#FFCDD2" stroke-width="5"/>
       <circle cx="72" cy="72" r="6" fill="#FFCDD2"/>
       <path d="M72 38 L72 48 M72 96 L72 106 M38 72 L48 72 M96 72 L106 72" stroke="#FFCDD2" stroke-width="5" stroke-linecap="round"/>`;
   }
-  return `<path d="M72 30 L82 58 L110 58 L86 76 L96 106 L72 88 L48 106 L58 76 L34 58 L62 58 Z" fill="#FFF59D"/>`;
+  if (state === "win") {
+    return `<path d="M72 30 L82 58 L110 58 L86 76 L96 106 L72 88 L48 106 L58 76 L34 58 L62 58 Z" fill="#FFF59D"/>`;
+  }
+  return `<path d="M58 50 L86 78 M86 50 L58 78" stroke="#FF8A65" stroke-width="7" stroke-linecap="round"/>
+    <path d="M40 98 Q 72 86, 104 98" stroke="#FF8A65" stroke-width="5" fill="none" stroke-linecap="round"/>`;
 }
 
-function indicatorFrame(turn: Turn): string {
-  const lines = turn === "player" ? ["YOUR", "TURN"] : turn === "enemy" ? ["ENEMY", "TURN"] : ["FLEET", "SUNK"];
-  const body = `${indicatorGlyph(turn)}
+function indicatorLines(state: IndicatorState, shipLength?: number, orientation?: ShipOrientation): [string, string] {
+  switch (state) {
+    case "placement":
+      return [`LEN ${shipLength ?? ""}`, orientation === "vertical" ? "VERT" : "HORIZ"];
+    case "player":
+      return ["YOUR", "TURN"];
+    case "enemy":
+      return ["ENEMY", "TURN"];
+    case "win":
+      return ["FLEET", "SUNK"];
+    case "lose":
+      return ["FLEET", "LOST"];
+  }
+}
+
+function indicatorFrame(state: IndicatorState, shipLength?: number, orientation?: ShipOrientation): string {
+  const lines = indicatorLines(state, shipLength, orientation);
+  const body = `${indicatorGlyph(state)}
     <text x="72" y="118" font-family="Segoe UI, sans-serif" font-size="19" font-weight="800" text-anchor="middle" fill="#FFFFFF">${lines[0]}</text>
     <text x="72" y="136" font-family="Segoe UI, sans-serif" font-size="19" font-weight="800" text-anchor="middle" fill="#FFFFFF">${lines[1]}</text>`;
-  return toDataUri(cellWrap(INDICATOR_BG[turn], body));
+  return toDataUri(cellWrap(INDICATOR_BG[state], body));
+}
+
+export type ShipOrientation = "horizontal" | "vertical";
+
+export function placementFrame(shipLength: number, orientation: ShipOrientation): string {
+  return indicatorFrame("placement", shipLength, orientation);
 }
 
 export function playerTurnFrame(): string {
@@ -94,6 +156,10 @@ export function enemyTurnFrame(): string {
   return indicatorFrame("enemy");
 }
 
-export function fleetSunkFrame(): string {
+export function victoryFrame(): string {
   return indicatorFrame("win");
+}
+
+export function defeatFrame(): string {
+  return indicatorFrame("lose");
 }
